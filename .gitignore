@@ -1,0 +1,34 @@
+# build outputs
+target/
+build/
+out/
+bin/
+*.class
+target/**/*.jar
+
+# rust
+**/target/
+
+# go
+**/*.test
+**/*.out
+go-microbatch/bench
+rust-microbatch/target/release/rust-microbatch
+
+# os
+.DS_Store
+Thumbs.db
+
+# editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# claude (local settings)
+.claude/
+
+# benchmark 原始数据（保留 results/ 但排除中间产物）
+*.pb.gz
+pprof/
+flamegraph/

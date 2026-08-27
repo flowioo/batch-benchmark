@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BatchBenchmarkResult",
+  "description": "统一 benchmark 结果 schema。所有 subproject 必须输出此格式。",
+  "type": "object",
+  "required": ["name", "language", "version", "config", "metrics"],
+  "properties": {
+    "name": { "type": "string", "description": "subproject 名称，如 go-microbatch" },
+    "language": { "type": "string", "enum": ["go", "java", "rust", "node", "python", "cpp"] },
+    "version": { "type": "string", "description": "语言版本" },
+    "category": { "type": "string", "enum": ["microbatch", "localmq", "websocket", "grpc", "other"] },
+    "config": {
+      "type": "object",
+      "required": ["duration_sec", "batch_max", "window_ms", "concurrency", "payload_bytes"],
+      "properties": {
+        "duration_sec": { "type": "integer" },
+        "batch_max":    { "type": "integer" },
+        "window_ms":    { "type": "integer" },
+        "concurrency":  { "type": "integer" },
+        "payload_bytes":{ "type": "integer" }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "required": ["tps", "p50_us", "p99_us", "p999_us", "rss_mb"],
+      "properties": {
+        "tps":              { "type": "number", "description": "稳态吞吐 (transactions per second)" },
+        "p50_us":           { "type": "number" },
+        "p99_us":           { "type": "number" },
+        "p999_us":          { "type": "number" },
+        "p9999_us":         { "type": "number" },
+        "max_us":           { "type": "number" },
+        "rss_mb":           { "type": "number", "description": "峰值 RSS (MB)" },
+        "alloc_mb_per_sec": { "type": "number", "description": "分配速率 (MB/s)" },
+        "gc_pause_p99_us":  { "type": "number", "description": "GC 暂停 P99 (μs)，0 表示无 GC" },
+        "errors":           { "type": "integer" }
+      }
+    },
+    "timestamp": { "type": "string", "format": "date-time" }
+  }
+}
