@@ -1,0 +1,27 @@
+{
+  "name": "go-microbatch",
+  "language": "go",
+  "version": "go1.26.1",
+  "category": "microbatch",
+  "config": {
+    "DurationSec": 30,
+    "BatchMax": 500,
+    "WindowMs": 50,
+    "Concurrency": 3000,
+    "PayloadBytes": 64
+  },
+  "metrics": {
+    "tps": 71942.54358668109,
+    "p50_us": 40271.703432545946,
+    "p99_us": 47315.12589614803,
+    "p999_us": 52480.74602497722,
+    "p9999_us": 58884.365535558834,
+    "max_us": 59211,
+    "rss_mb": 34.54907989501953,
+    "alloc_mb_per_sec": 8.873899482428346,
+    "gc_pause_p99_us": 15760,
+    "errors": 0,
+    "success": 2159091
+  },
+  "timestamp": "2026-08-27T14:19:42+08:00"
+}

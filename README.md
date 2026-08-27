@@ -12,31 +12,40 @@
 
 测试参数：`batch=500, window=50ms, payload=64B, duration=30s`，10 核 M-series ARM64 macOS。
 
-| language | concurrency | TPS | P50 (μs) | P99 (μs) | max (μs) | RSS (MB) | 状态 |
-|---|---|---|---|---|---|---|---|
-| go | 1000 | 77 499 | 12 162 | 18 197 | 27 015 | 22 | ✅ |
-| go | 5000 | 70 678 | 70 795 | 80 353 | 88 058 | 50 | ✅ |
-| go | 10 000 | _TIMEOUT_ | - | - | - | - | ⏱️ 120s+ |
-| go | 20 000 | _TIMEOUT_ | - | - | - | - | ⏱️ 120s+ |
-| java | 1000 | 26 161 | 39 355 | 48 417 | 99 626 | 81 | ✅ |
-| java | 5000 | _TIMEOUT_ | - | - | - | - | ⏱️ 120s+ |
-| java | 10 000 | _TIMEOUT_ | - | - | - | - | ⏱️ 120s+ |
-| java | 20 000 | _TIMEOUT_ | - | - | - | - | ⏱️ 120s+ |
-| rust | 1000 | 62 033 | 16 032 | 16 982 | 24 158 | 35 | ✅ |
-| rust | 5000 | _TIMEOUT_ | - | - | - | - | ⏱️ 120s+ |
-| rust | 10 000 | _TIMEOUT_ | - | - | - | - | ⏱️ 120s+ |
-| rust | 20 000 | _TIMEOUT_ | - | - | - | - | ⏱️ 120s+ |
+| language | concurrency | TPS | P50 (ms) | P99 (ms) | max (ms) | RSS (MB) | 状态 |
+|---|---|---:|---:|---:|---:|---:|---|
+| go | 1 000 | 77 500 | 12.2 | 18.2 | 27.0 | 23 | ✅ |
+| go | 2 000 | 73 636 | 26.0 | 33.5 | 42.0 | 30 | ✅ |
+| go | 3 000 | 71 943 | 40.3 | 47.3 | 53.7 | 35 | ✅ |
+| go | 5 000 | 70 678 | 70.8 | 80.4 | 88.1 | 50 | ✅ |
+| go | 7 000 | 70 726 | 98.9 | 98.9 | 118.1 | 67 | ✅ |
+| go | 10 000 | – | – | – | – | – | ⏱️ TIMEOUT |
+| go | 20 000 | – | – | – | – | – | ⏱️ TIMEOUT |
+| java | 1 000 | 26 161 | 39.4 | 48.4 | 99.6 | 81 | ✅ |
+| java | 2 000 | **1 799** | 98.9 | 98.9 | 100.0 | 138 | ⚠️ 退化 |
+| java | 3 000 | – | – | – | – | – | ⏱️ TIMEOUT |
+| java | 5 000+ | – | – | – | – | – | ⏱️ TIMEOUT |
+| rust | 1 000 | 62 033 | 16.0 | 17.0 | 24.2 | 35 | ✅ |
+| rust | 2 000 | 47 300 | 42.7 | 55.6 | 100.8 | 72 | ✅ |
+| rust | 3 000 | 46 617 | 64.6 | 98.9 | 190.4 | 106 | ✅ |
+| rust | 5 000 | 47 233 | 98.9 | 98.9 | 347.3 | 176 | ✅ |
+| rust | 10 000 | – | – | – | – | – | ⏱️ TIMEOUT |
+| rust | 20 000 | – | – | – | – | – | ⏱️ TIMEOUT |
 
-> 数据由 `bash scripts/sweep.sh` 跑出，落盘 `results/<lang>_c<conc>_r<round>.json`，完整对比见 [`BENCHMARK_RESULTS.md`](BENCHMARK_RESULTS.md)。
+> 数据由 `bash scripts/sweep-boundary.sh` 跑出，落盘 `results/<lang>_c<conc>_r<round>.json`，完整对比与解读见 [`BENCHMARK_RESULTS.md`](BENCHMARK_RESULTS.md)。
 
 **关键结论**：
 
-1. **1000 档**：Go ≈ Rust > Java。语言差距 **2-3 倍**（强抖），来自 GC 暂停 + 直方图同步开销。
-2. **5000 档**：只有 Go 跑通。Java/Rust 在 1:1 OS 线程模型下被线程调度拖垮。
-3. **10000+ 档**：**所有语言都卡死**。这是**同步等结果 + 单 drainer 反压**模型的扩展性上限，**不是语言问题**。
-4. **`go c=5000 r3` 出现 `max=8.3s` 长尾**：证明 Go 在 5000 也已经在 GC + 调度边界。
+1. **每语言有自己的天花板**：Go 70k @ c=7000、Rust 47k @ c=2000+、Java 26k @ c=1000。瓶颈 = `drainer_rate × batch × (1 - sink_cost)`。
+2. **扩展模式不同**：
+   - **Go**：TPS 平顶（c=2000 起稳定 71-77k），p50 随 c 线性增长（12→99ms）。
+   - **Rust**：TPS 在 c=2000 跌到 47k 后稳定，但 p50 持续增长。OS-thread 调度 + park 唤醒延迟。
+   - **Java**：c=2000 突然塌到 1.8k（TPS 衰减 14×），p50 顶到窗口 99ms。MPSC 队列 + LockSupport.park 抖动。
+3. **10000+ 统一卡死**：三语言都过不去 → **同步等结果 + 单 drainer 反压**的模型天花板，非语言问题。
+4. **rust c=5000 在重负载下曾 TIMEOUT，但空闲机器上稳定 47k TPS**：说明反压下 JVM/调度边界会被机器背景负载放大，不是模型本身 bug。
+5. **资源占用**：Rust 内存最重（c=5000 达 176MB），Java 次之，Go 最轻（c=7000 才 67MB）。
 
-> "Agent 自主观测"证据：见 [`BENCHMARK_RESULTS.md §演进`](BENCHMARK_RESULTS.md)。
+> "Agent 自主观测→迭代"证据：见 [`BENCHMARK_RESULTS.md §演进`](BENCHMARK_RESULTS.md)。
 
 ---
 
@@ -104,8 +113,11 @@ producers (N) ──MPSC queue──▶ drainer (1)
 
 ### 跑三语言梯度对比（4 档 × 3 轮）
 ```bash
-./scripts/sweep.sh        # ~25 min，结果到 results/
-./scripts/report-sweep.sh # 汇总成并发维度对比表
+./scripts/sweep.sh           # ~25 min，结果到 results/
+./scripts/report-sweep.sh    # 汇总成并发维度对比表
+
+# 边界档补全（c=2000/3000/5000/7000 + 120s wall timeout）
+./scripts/sweep-boundary.sh  # ~25 min，跳过已有 .json 的档
 ```
 
 ### 单语言重跑
@@ -160,6 +172,8 @@ batch-benchmark/
 ├── scripts/
 │   ├── run.sh                     # 跑一个或全部（默认参数）
 │   ├── sweep.sh                   # 并发梯度 4 档 × 3 轮
+│   ├── sweep-boundary.sh          # 边界档补全 c=2000/3000/5000/7000 + 120s wall timeout
+│   ├── sweep-remaining.sh         # 早期 sweep 的 120s TIMEOUT 包装版
 │   ├── report.sh                  # 简单汇总
 │   └── report-sweep.sh            # 并发维度中位数汇总
 ├── docs/

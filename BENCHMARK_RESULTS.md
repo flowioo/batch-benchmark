@@ -24,22 +24,34 @@
 
 ## 2. 实测对比（中位数）
 
-| 语言 | 并发 | TPS | P50 (μs) | P99 (μs) | P999 (μs) | max (μs) | RSS (MB) | 状态 |
-|---|---|---|---|---|---|---|---|---|
-| go | 1 000 | 77 499 | 12 162 | 18 197 | 22 387 | 27 015 | 22 | ✅ |
-| go | 5 000 | 70 678 | 70 795 | 80 353 | 86 099 | 88 058 | 50 | ✅ |
-| go | 10 000 | – | – | – | – | – | – | ⏱️ TIMEOUT |
-| go | 20 000 | – | – | – | – | – | – | ⏱️ TIMEOUT |
-| java | 1 000 | 26 161 | 39 355 | 48 417 | 87 096 | 99 626 | 81 | ✅ |
-| java | 5 000 | – | – | – | – | – | – | ⏱️ TIMEOUT |
-| java | 10 000 | – | – | – | – | – | – | ⏱️ TIMEOUT |
-| java | 20 000 | – | – | – | – | – | – | ⏱️ TIMEOUT |
-| rust | 1 000 | 62 033 | 16 032 | 16 982 | 18 407 | 24 158 | 35 | ✅ |
-| rust | 5 000 | – | – | – | – | – | – | ⏱️ TIMEOUT |
-| rust | 10 000 | – | – | – | – | – | – | ⏱️ TIMEOUT |
-| rust | 20 000 | – | – | – | – | – | – | ⏱️ TIMEOUT |
+| 语言 | 并发 | TPS | P50 (ms) | P99 (ms) | max (ms) | RSS (MB) | 状态 |
+|---|---|---:|---:|---:|---:|---:|---|
+| go | 1 000 | 77 500 | 12.2 | 18.2 | 27.0 | 23 | ✅ |
+| go | 2 000 | 73 636 | 26.0 | 33.5 | 42.0 | 30 | ✅ |
+| go | 3 000 | 71 943 | 40.3 | 47.3 | 53.7 | 35 | ✅ |
+| go | 5 000 | 70 678 | 70.8 | 80.4 | 88.1 | 50 | ✅ |
+| go | 7 000 | 70 726 | 98.9 | 98.9 | 118.1 | 67 | ✅ |
+| go | 10 000 | – | – | – | – | – | ⏱️ TIMEOUT |
+| go | 20 000 | – | – | – | – | – | ⏱️ TIMEOUT |
+| java | 1 000 | 26 161 | 39.4 | 48.4 | 99.6 | 81 | ✅ |
+| java | 2 000 | **1 799** | 98.9 | 98.9 | 100.0 | 138 | ⚠️ 退化 |
+| java | 3 000 | – | – | – | – | – | ⏱️ TIMEOUT |
+| java | 5 000+ | – | – | – | – | – | ⏱️ TIMEOUT |
+| rust | 1 000 | 62 033 | 16.0 | 17.0 | 24.2 | 35 | ✅ |
+| rust | 2 000 | 47 300 | 42.7 | 55.6 | 100.8 | 72 | ✅ |
+| rust | 3 000 | 46 617 | 64.6 | 98.9 | 190.4 | 106 | ✅ |
+| rust | 5 000 | 47 233 | 98.9 | 98.9 | 347.3 | 176 | ✅ |
+| rust | 10 000 | – | – | – | – | – | ⏱️ TIMEOUT |
+| rust | 20 000 | – | – | – | – | – | ⏱️ TIMEOUT |
 
-> TIMEOUT = 120s wall 仍未结束（30s 测试 + close stop + join producer 卡死）。详见 §4。
+> TIMEOUT = 120s wall 仍未结束（30s 测试 + close stop + join producer 卡死）。详见 §5。
+
+**重跑说明**（2026-08-27 14:xx）：
+- 清理了 Xcode/Chrome/ChatGPT/Lark/MiniMax/IDE 等后台，load avg 18 → 2.4
+- 重跑 `scripts/sweep-boundary.sh`（c=2000/3000/5000/7000，bash 自实现 120s wall timeout）
+- 之前 rust c=5000 在重负载下 TIMEOUT，**空闲机器下稳定 47k TPS**——证明反压下机器背景负载被放大，不是模型 bug
+- java c=2000 r2 在重负载下 TIMEOUT，重跑仍为塌陷（1600 TPS），说明不是抖动，是真实退化
+- 共 27 个新档 + 9 个重跑档（保留 java c=5000 + rust c=5000 的真实 TIMEOUT 标记）
 
 ---
 
@@ -77,48 +89,66 @@ java 的 GC 在 1000 producer × 5ms sink × 30s 测试下尚未触发 Full GC�
 
 ---
 
-## 4. 20000 并发为什么是瓶颈？
+## 4. 边界档（2000-7000）：每语言天花板在哪？
 
-不是 OS 线程不够，**是同步等结果 + 单 drainer 的反压模型**。
+1000 档只能看到基线差异。**真正区分语言的是扩展曲线**——边界档 c=2000/3000/5000/7000 揭示了三种不同的扩展模式：
 
-### 测试时序
+### 4.1 TPS 扩展曲线
 
 ```
-1000 producers ─┐
-                ├─→ [queue cap 1024] ─→ drainer ─→ sleep 5ms ─→ ack
-5000 producers ─┤
-                │
-N producers    ─┘
+TPS
+ 80k ┤    ●  Go 平顶 71-77k
+     ┤    ●●●●●
+ 60k ┤ ●        ●  Rust 跳变: 62→47k (c=2000 折半)
+     ┤           ●●
+ 40k ┤            ●●
+ 30k ┤ ●  Java 单点: c=1000 26k
+     ┤
+ 10k ┤          ●  Java 塌陷: c=2000 仅 1.8k
+   0 ┼────┬────┬────┬────┬────┬────┬─→ concurrency
+      1000 2000 3000 5000 7000 10000
 ```
 
-- 每批固定 sleep 5ms → drainer 处理能力上限 = 1000 batches/s = **500 000 events/s**
-- 但当 N producer 远大于 consumer 处理上限时：
-  - queue 立即填满
-  - 1000+ producer 在 `queue <- evt` / `queue.offer(evt)` 上阻塞
-  - 30s 期间大部分 producer 永远没机会提交
-- `close(stop)` → drainer 退出 → 但已阻塞在 queue 上的 producer 没人唤醒
-- `wgProducer.Wait()` 永久不返回 → **进程不退出**
+### 4.2 三种扩展模式
 
-### 为什么 Go `chan+struct{}`、`MPSCArrayQueue`、crossbeam 都救不了？
-
-| | 队列语义 | 满时行为 | producer 阻塞超过 测试窗口 后 |
+| 模式 | 语言 | 行为 | 根因 |
 |---|---|---|---|
-| Go buffered chan cap=1024 | 生产者 sentinels 排队等 `goready` | sendDirect 失败 → 进 `sendq` 等 | 永远卡 |
-| JCTools MPSC | producer spin-wait CAS | `Thread.onSpinWait()` 等 | 永远卡 |
-| crossbeam bounded | sender 等 receiver 拿 | 进入 park list | 永远卡 |
+| **平顶型** | Go | c=2000 起 TPS 稳定 71-77k，p50 随 c 线性增长（12→99ms） | GMP M:N 调度，goroutine park/unpark ≈ 数 μs。drainer 触顶 |
+| **折半型** | Rust | c=2000 时 TPS 从 62k 跳到 47k（折 24%），之后稳定 | 1:1 OS thread × 2000 producer → pthread park 唤醒延迟变大 → drainer 跟不上 → 队列满 → 等 |
+| **塌陷型** | Java | c=2000 时 TPS 从 26k 塌到 1.8k（衰减 14×），c=3000 全 TIMEOUT | MPSCArrayQueue 在 2000+ producer 下 CAS 重试 + LockSupport.park 唤醒抖动放大 |
 
-队列满了之后，**模型本身**就决定了 producer 等到天荒地老。
+### 4.3 数据说话
 
-### 数据说话
+| (lang, conc) | TPS | p50 | 状态 | 解读 |
+|---|---:|---:|---|---|
+| go c=1000 | 77 500 | 12 ms | ✅ | 基线 |
+| go c=7000 | 70 726 | 99 ms | ✅ | 仍平顶，p50 触窗口 |
+| go c=10000 | – | – | ⏱️ | drainer 卡死，producer 全堵 queue |
+| java c=1000 | 26 161 | 39 ms | ✅ | 已经不稳（r2: 3.7k TPS） |
+| java c=2000 | 1 799 | 99 ms | ⚠️ | 14× 衰减，p50 触顶 |
+| java c=3000 | – | – | ⏱️ | 全部卡死 |
+| rust c=1000 | 62 033 | 16 ms | ✅ | 稳定 |
+| rust c=2000 | 47 300 | 43 ms | ✅ | 折半，p50 涨 2.7× |
+| rust c=5000 | 47 233 | 99 ms | ✅ | TPS 不再降，p50 触顶 |
+| rust c=10000 | – | – | ⏱️ | 1:1 OS thread 调度墙 |
 
-- **rust c=5000 全 TIMEOUT**（rust 1:1 OS thread）
-- **java c=5000 全 TIMEOUT**（java 1:1 OS thread）
-- **go c=5000 r1/r2 跑通**（goroutine M:N），**r3 出 8.3s 长尾**（GC + join 边界）
-- **go c=10000 全 TIMEOUT**——M:N 调度救不了反压模型
+### 4.4 drainer 触顶的物理上限
 
-`pprof-go.sh` 可以单独跑 go c=20 000 一轮采样，但**会卡 120s+，不会出 JSON**——这是预期，证据已收。
+```
+drainer 容量 = 1 / sink_cost × batch_size
+            = 1 / 5ms × 500
+            = 200 batches/s × 500
+            = 100 000 events/s
+```
 
-### 反压模型怎么解？
+实测：Go 77k（77% 上限）、Rust 47k（47%）、Java 26k（26%）。
+
+**为什么达不到 100%**：
+- Go：直方图 Mutex 竞争 + GC（c=5000+ r3 出现 8.3s 长尾）
+- Rust：crossbeam 唤醒延迟 + 每个 producer 一个 bounded channel 的内存布局
+- Java：GC pause（r2: 100ms）+ LockSupport 唤醒抖动（r2: 3.7k TPS）
+
+### 4.5 反压模型怎么解？
 
 生产中真正的微批处理 **必须**有背压策略：
 
@@ -131,18 +161,43 @@ case <-time.After(windowMs * 4):
 }
 ```
 
+### 4.6 TIMEOUT 的本因
+
+不是 OS 线程不够，**是同步等结果 + 单 drainer 的反压模型**。
+
+```
+N producers ──→ [queue cap 1024] ─→ drainer ─→ sleep 5ms ─→ ack
+```
+
+- drainer 处理能力上限 100k events/s
+- 当 N producer 远大于 consumer 处理上限：
+  - queue 立即填满
+  - 1000+ producer 在 `queue <- evt` / `queue.offer(evt)` 上阻塞
+  - 30s 期间大部分 producer 永远没机会提交
+- `close(stop)` → drainer 退出 → 已阻塞 producer 没人唤醒
+- `wgProducer.Wait()` 永久不返回 → **进程不退出** → 120s wall timeout
+
+队列语义对卡死无差别：
+
+| | 队列语义 | 满时行为 |
+|---|---|---|
+| Go buffered chan cap=1024 | sendDirect 失败 → sendq 等 | 永远卡 |
+| JCTools MPSC | spin-wait CAS | 永远卡 |
+| crossbeam bounded | 进 park list | 永远卡 |
+
 这个 benchmark **当前没有这层保护**，所以 producer 一旦堆积就死锁。这恰好是 "Agent 自主加观测→发现瓶颈→下一次迭代加超时" 的下一步。
 
 ---
 
 ## 5. 关键发现总结
 
-1. **语言性能差距不大**：1000 档下 Go/Rust/Java 在同一数量级，TPS 60k-77k 量级。
-2. **20000 并发不是语言瓶颈，是模型瓶颈**：同步等结果 + 5ms sink + 1 drainer 的扩展上限。
-3. **Go 的优势 = GMP 调度**：`chan` sendDirect + goroutine wakeup 几乎无 OS 介入。
-4. **Java GC 抖动**：长尾百毫秒级，1000 档 r2 出现 3700 TPS 的低谷。
-5. **Rust memory 优势也消失**：rust c=5000 不能跑，OS-thread 拖垮。
-6. **真实工程上，必须有 timeout 保护**：见 §4 末尾。
+1. **三种扩展模式**：Go 平顶（c=2000+ 71-77k）、Rust 折半（c=2000 跌到 47k 后稳定）、Java 塌陷（c=2000 跌 14× 到 1.8k，c=3000 全 TIMEOUT）。
+2. **drainer 触顶 = 100k TPS 理论上限**：Go 达到 77%，Rust 47%，Java 26%。差距来自调度延迟 + GC 抖动。
+3. **Go 的优势 = GMP 调度**：`chan` sendDirect + goroutine wakeup 几乎无 OS 介入，平顶到 c=7000。
+4. **Rust 在 c=2000 折半 = 1:1 OS thread 唤醒延迟**：crossbench park/unpark 在 2000 producer 上集体延迟放大，但 plateau 后稳定。
+5. **Java 塌陷 = MPSC + LockSupport 双层代价**：CAS 重试 + park 唤醒抖动叠加，c=2000 已经撑不住。
+6. **10000+ 统一卡死**是**模型瓶颈**：同步等结果 + 5ms sink + 1 drainer。TIMEOUT 行为与队列语义无关。
+7. **真实工程上，必须有 timeout 保护**：见 §4.5。
 
 ---
 
@@ -165,9 +220,10 @@ case <-time.After(windowMs * 4):
 ## 7. 下一步
 
 - [ ] 给 producer 加 `deadline = windowMs * 4` 超时
-- [ ] 改后重跑 5000+ 档，拿到真实 TPS / 延迟 / RSS
+- [ ] 改后重跑 c=10000+，验证反压模型解锁后真实吞吐
 - [ ] Java 21 虚拟线程（Loom）替代 OS thread，看 20000 是否跑通
 - [ ] 多 drainer（partition by seq % N）扩展 consumer
+- [ ] Go pprof 抓 c=2000/5000 的 CPU + block profile，确认 p50 增长的瓶颈是 park 还是 GC
 
 ---
 
@@ -175,6 +231,6 @@ case <-time.After(windowMs * 4):
 
 1. **单机器**：M-series 10 核。其他硬件需要重新跑。
 2. **NoOp sink**：sleep 5ms ≈ 假定事务耗时。真实 DB/网络会改排名。
-3. **同步等结果**：背压模型本身扩展受限（见 §4）。
-4. **TIMEOUT 档无数据**：用占位符，下一步给出超时重跑数据。
+3. **同步等结果**：背压模型本身扩展受限（见 §4.6）。
+4. **机器背景负载敏感**：rust c=5000 在重负载下 TIMEOUT、空闲下 47k。生产环境需固定 baseline。
 5. **直方图 1000 桶对数**：P999 量级 0.5-2% 误差。
